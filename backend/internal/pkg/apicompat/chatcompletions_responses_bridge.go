@@ -532,11 +532,19 @@ func buildChatMessagesFromItems(messages []ChatMessage, rawItems []json.RawMessa
 			// 的 {"input": ...} 参数，与请求方向的工具降级（customToolInputSchema）
 			// 保持一致，模型才能把历史与当前工具定义对上。
 			arguments, _ := json.Marshal(map[string]string{"input": rawString(item["input"])})
+			name := rawString(item["name"])
+			// 与上面 function_call 同理：namespace 子工具的 custom 调用在历史里带
+			// namespace 字段，必须摊平成请求方向声明的名字。漏了这一步时历史里只有
+			// 裸名（如 exec），模型会照裸名调用，回程在 namespaceTools 里查不到摊平名，
+			// 只能降级成 function_call，Codex 按 namespace+name 路由即判 unsupported call。
+			if ns := rawString(item["namespace"]); ns != "" {
+				name = flattenNamespaceToolName(ns, name)
+			}
 			toolCall := ChatToolCall{
 				ID:   rawString(item["call_id"]),
 				Type: "function",
 				Function: ChatFunctionCall{
-					Name:      rawString(item["name"]),
+					Name:      name,
 					Arguments: string(arguments),
 				},
 			}
