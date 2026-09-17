@@ -783,6 +783,28 @@ func TestResponsesInputToChatMessages_NamespacedFunctionCallHistory(t *testing.T
 	assert.Equal(t, "gmail__send", messages[0].ToolCalls[0].Function.Name)
 }
 
+func TestResponsesInputToChatMessages_NamespacedCustomToolCallHistory(t *testing.T) {
+	// 回归：namespace 子工具的 custom_tool_call 历史项必须摊平成请求方向声明的
+	// 名字（functions__exec）。漏掉时历史里只有裸名 exec，模型会照裸名调用，
+	// 回程在 namespaceTools 里查不到摊平名，只能降级成 function_call，
+	// Codex 按 namespace+name 路由即判 unsupported call——第一轮能用、第二轮起被吞。
+	input := json.RawMessage(`[
+		{"type":"custom_tool_call","call_id":"call_n","name":"exec","namespace":"functions","input":"dir"},
+		{"type":"custom_tool_call_output","call_id":"call_n","output":"main.go"}
+	]`)
+
+	messages, err := responsesInputToChatMessages("", input)
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+
+	require.Len(t, messages[0].ToolCalls, 1)
+	assert.Equal(t, "functions__exec", messages[0].ToolCalls[0].Function.Name)
+	assert.Equal(t, "call_n", messages[0].ToolCalls[0].ID)
+	assert.JSONEq(t, `{"input":"dir"}`, messages[0].ToolCalls[0].Function.Arguments)
+
+	assert.Equal(t, "call_n", messages[1].ToolCallID)
+}
+
 func TestChatCompletionsChunkToResponsesEvents_CustomToolNameArrivesLate(t *testing.T) {
 	state := NewChatCompletionsToResponsesStreamState("glm-5.2")
 	state.CustomTools = map[string]bool{"exec": true}
