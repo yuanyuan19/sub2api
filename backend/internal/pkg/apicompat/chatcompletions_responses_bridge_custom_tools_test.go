@@ -1300,3 +1300,75 @@ func TestChatCompletionsChunkToResponsesEvents_FunctionToolStreamUnaffected(t *t
 	}
 	assert.True(t, sawArgsDelta, "function 工具应保持原有参数增量事件")
 }
+func TestResponsesChatBridge_BareNamespaceCustomToolRoundTrip(t *testing.T) {
+	// 回归：模型照搬历史里的裸子工具名 exec 调用（而不是摊平名 functions__exec），
+	// 回程必须仍还原为带 namespace 的 custom_tool_call，而不是降级成 function_call。
+	namespaceTools := NamespaceToolNames([]ResponsesTool{{
+		Type: "namespace", Name: "functions", Tools: []ResponsesTool{
+			{Type: "custom", Name: "exec", Description: "Run local code"},
+		},
+	}})
+	resp := &ChatCompletionsResponse{Choices: []ChatChoice{{Message: ChatMessage{
+		ToolCalls: []ChatToolCall{{
+			ID: "call_exec", Function: ChatFunctionCall{Name: "exec", Arguments: `{"input":"pwd"}`},
+		}},
+	}}}}
+	out := ChatCompletionsResponseToResponses(resp, "deepseek-test", nil, nil, false, namespaceTools)
+	require.Len(t, out.Output, 1)
+	assert.Equal(t, "custom_tool_call", out.Output[0].Type)
+	assert.Equal(t, "functions", out.Output[0].Namespace)
+	assert.Equal(t, "exec", out.Output[0].Name)
+	assert.Equal(t, "pwd", out.Output[0].Input)
+}
+
+func TestResponsesChatBridge_BareNamespaceCustomToolStreamRoundTrip(t *testing.T) {
+	namespaceTools := NamespaceToolNames([]ResponsesTool{{
+		Type: "namespace", Name: "functions", Tools: []ResponsesTool{
+			{Type: "custom", Name: "exec", Description: "Run local code"},
+		},
+	}})
+	state := NewChatCompletionsToResponsesStreamState("deepseek-test")
+	state.NamespaceTools = namespaceTools
+
+	idx := 0
+	events := ChatCompletionsChunkToResponsesEvents(&ChatCompletionsChunk{
+		Choices: []ChatChunkChoice{{Delta: ChatDelta{ToolCalls: []ChatToolCall{{
+			Index: &idx,
+			ID:    "call_exec",
+			Function: ChatFunctionCall{
+				Name: "exec", Arguments: `{"input":"pwd"}`,
+			},
+		}}}}},
+	}, state)
+	events = append(events, FinalizeChatCompletionsResponsesStream(state)...)
+
+	var added, done *ResponsesOutput
+	for i := range events {
+		switch events[i].Type {
+		case "response.output_item.added":
+			added = events[i].Item
+		case "response.output_item.done":
+			if events[i].Item != nil && events[i].Item.Type == "custom_tool_call" {
+				done = events[i].Item
+			}
+		}
+	}
+	require.NotNil(t, added)
+	assert.Equal(t, "custom_tool_call", added.Type)
+	assert.Equal(t, "functions", added.Namespace)
+	assert.Equal(t, "exec", added.Name)
+	require.NotNil(t, done)
+	assert.Equal(t, "functions", done.Namespace)
+	assert.Equal(t, "exec", done.Name)
+	assert.Equal(t, "pwd", done.Input)
+}
+
+func TestNamespaceChildByBareName_AmbiguousStaysFunctionCall(t *testing.T) {
+	namespaceTools := map[string]NamespacedToolName{
+		"functions__exec":     {Namespace: "functions", Name: "exec", Custom: true},
+		"collaboration__exec": {Namespace: "collaboration", Name: "exec", Custom: true},
+	}
+	if _, ok := namespaceChildByBareName("exec", namespaceTools); ok {
+		t.Fatalf("ambiguous bare name must not resolve to a namespace child")
+	}
+}
