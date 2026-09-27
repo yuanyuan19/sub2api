@@ -49,6 +49,39 @@ func (s *updateServiceGitHubClientStub) FetchChecksumFile(context.Context, strin
 	panic("FetchChecksumFile should not be called when no update is available")
 }
 
+func TestUpdateServiceDisabledBlocksBinaryChanges(t *testing.T) {
+	for _, value := range []string{"true", "1", " TRUE "} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("UPDATE_DISABLED", value)
+			svc := NewUpdateService(nil, nil, "0.2.8", "release")
+			require.ErrorIs(t, svc.PerformUpdate(context.Background()), ErrUpdatesDisabled)
+			require.ErrorIs(t, svc.Rollback(), ErrUpdatesDisabled)
+			require.ErrorIs(t, svc.RollbackToVersion(context.Background(), "0.2.7"), ErrUpdatesDisabled)
+		})
+	}
+}
+
+func TestUpdateServiceDisabledPreservesUpdateChecks(t *testing.T) {
+	t.Setenv("UPDATE_DISABLED", "true")
+	svc := NewUpdateService(&updateServiceCacheStub{}, &updateServiceGitHubClientStub{
+		release: &GitHubRelease{TagName: "v0.2.9", Name: "v0.2.9"},
+	}, "0.2.8", "release")
+	info, err := svc.CheckUpdate(context.Background(), true)
+	require.NoError(t, err)
+	require.True(t, info.HasUpdate)
+	require.Equal(t, "0.2.9", info.LatestVersion)
+}
+
+func TestUpdateServiceDisabledDefaultsOff(t *testing.T) {
+	for _, value := range []string{"", "false", "0"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("UPDATE_DISABLED", value)
+			svc := NewUpdateService(nil, nil, "0.2.8", "release")
+			require.False(t, svc.updatesDisabled)
+		})
+	}
+}
+
 func TestUpdateServicePerformUpdateNoUpdateReturnsSentinel(t *testing.T) {
 	svc := NewUpdateService(
 		&updateServiceCacheStub{},
