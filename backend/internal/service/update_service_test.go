@@ -5,6 +5,8 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strconv"
 	"testing"
 	"time"
 
@@ -31,10 +33,11 @@ type updateServiceGitHubClientStub struct {
 	release        *GitHubRelease
 	recentReleases []*GitHubRelease
 	recentErr      error
+	latestErr      error
 }
 
 func (s *updateServiceGitHubClientStub) FetchLatestRelease(context.Context, string) (*GitHubRelease, error) {
-	return s.release, nil
+	return s.release, s.latestErr
 }
 
 func (s *updateServiceGitHubClientStub) FetchRecentReleases(context.Context, string, int) ([]*GitHubRelease, error) {
@@ -47,6 +50,51 @@ func (s *updateServiceGitHubClientStub) DownloadFile(context.Context, string, st
 
 func (s *updateServiceGitHubClientStub) FetchChecksumFile(context.Context, string) ([]byte, error) {
 	panic("FetchChecksumFile should not be called when no update is available")
+}
+
+func TestCompareVersionsBuildMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		current string
+		latest  string
+		want    int
+	}{
+		{"0.2.8+mainstation.1", "0.2.8", 0},
+		{"v0.2.8+mainstation.2", "v0.2.8+other.1", 0},
+		{"0.2.8+mainstation.1", "0.2.9", -1},
+		{"0.2.8+mainstation.1", "0.2.7", 1},
+		{"0.2.9", "0.2.8+mainstation.1", 1},
+		{"0.2.8-rc.1+build.2", "0.2.8", 0},
+	} {
+		t.Run(tc.current+"/"+tc.latest, func(t *testing.T) {
+			require.Equal(t, tc.want, compareVersions(tc.current, tc.latest))
+		})
+	}
+}
+
+func TestUpdateServiceCheckUpdateReportsPolicy(t *testing.T) {
+	for _, disabled := range []bool{false, true} {
+		for _, mode := range []string{"fresh", "cached", "cached-error", "error"} {
+			t.Run(fmt.Sprintf("disabled=%t/%s", disabled, mode), func(t *testing.T) {
+				t.Setenv("UPDATE_DISABLED", strconv.FormatBool(disabled))
+				client := &updateServiceGitHubClientStub{release: &GitHubRelease{TagName: "v0.2.8"}}
+				cache := &updateServiceCacheStub{}
+				svc := NewUpdateService(cache, client, "0.2.8+mainstation.2", "release")
+				if mode == "cached" || mode == "cached-error" {
+					_, err := svc.CheckUpdate(context.Background(), true)
+					require.NoError(t, err)
+				}
+				if mode == "error" || mode == "cached-error" {
+					client.latestErr = errors.New("upstream unavailable")
+				}
+				info, err := svc.CheckUpdate(context.Background(), mode != "cached")
+				require.NoError(t, err)
+				require.Equal(t, disabled, info.UpdatesDisabled)
+				require.False(t, info.HasUpdate)
+				require.Equal(t, mode == "cached" || mode == "cached-error", info.Cached)
+				require.Equal(t, "release", info.BuildType)
+			})
+		}
+	}
 }
 
 func TestUpdateServiceDisabledBlocksBinaryChanges(t *testing.T) {
@@ -69,6 +117,7 @@ func TestUpdateServiceDisabledPreservesUpdateChecks(t *testing.T) {
 	info, err := svc.CheckUpdate(context.Background(), true)
 	require.NoError(t, err)
 	require.True(t, info.HasUpdate)
+	require.True(t, info.UpdatesDisabled)
 	require.Equal(t, "0.2.9", info.LatestVersion)
 }
 
