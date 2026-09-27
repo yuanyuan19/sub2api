@@ -1363,12 +1363,137 @@ func TestResponsesChatBridge_BareNamespaceCustomToolStreamRoundTrip(t *testing.T
 	assert.Equal(t, "pwd", done.Input)
 }
 
+func TestResponsesChatBridge_ExplicitToolsOwnBareNamespaceNames(t *testing.T) {
+	for _, topLevelType := range []string{"function", "custom"} {
+		for _, childType := range []string{"function", "custom"} {
+			t.Run(topLevelType+"_with_"+childType+"_child", func(t *testing.T) {
+				tools := []ResponsesTool{
+					{Type: topLevelType, Name: "exec", Parameters: json.RawMessage(`{"type":"object"}`)},
+					{Type: "namespace", Name: "functions", Tools: []ResponsesTool{
+						{Type: childType, Name: "exec", Parameters: json.RawMessage(`{"type":"object"}`)},
+					}},
+				}
+				chatReq, err := ResponsesToChatCompletionsRequest(&ResponsesRequest{
+					Model: "test-model", Input: json.RawMessage(`"run the tool"`), Tools: tools,
+				})
+				require.NoError(t, err)
+				require.Len(t, chatReq.Tools, 2)
+				assert.Equal(t, "exec", chatReq.Tools[0].Function.Name)
+				assert.Equal(t, "functions__exec", chatReq.Tools[1].Function.Name)
+
+				customTools := CustomToolNames(tools)
+				functionTools := FunctionToolNames(tools)
+				namespaceTools := NamespaceToolNames(tools)
+				for _, target := range []struct {
+					name      string
+					namespace string
+					toolType  string
+				}{
+					{name: "exec", toolType: topLevelType},
+					{name: "functions__exec", namespace: "functions", toolType: childType},
+				} {
+					t.Run(target.name, func(t *testing.T) {
+						arguments := `{"input":"line one\\nline two"}`
+						checkItem := func(t *testing.T, item ResponsesOutput, completed bool) {
+							t.Helper()
+							expectedType := "function_call"
+							if target.toolType == "custom" {
+								expectedType = "custom_tool_call"
+							}
+							assert.Equal(t, expectedType, item.Type)
+							assert.Equal(t, "exec", item.Name)
+							assert.Equal(t, target.namespace, item.Namespace)
+							assert.Equal(t, "call_exec", item.CallID)
+							if completed {
+								if target.toolType == "custom" {
+									assert.Equal(t, `line one\nline two`, item.Input)
+								} else {
+									assert.JSONEq(t, arguments, item.Arguments)
+								}
+
+								input, err := json.Marshal([]any{item, map[string]string{
+									"type": expectedType + "_output", "call_id": item.CallID, "output": "tool result",
+								}})
+								require.NoError(t, err)
+								next, err := ResponsesToChatCompletionsRequest(&ResponsesRequest{
+									Model: "test-model", Input: input, Tools: tools,
+								})
+								require.NoError(t, err)
+								assert.Equal(t, chatReq.Tools, next.Tools)
+								require.Len(t, next.Messages, 2)
+								assert.Equal(t, "assistant", next.Messages[0].Role)
+								require.Len(t, next.Messages[0].ToolCalls, 1)
+								assert.Equal(t, target.name, next.Messages[0].ToolCalls[0].Function.Name)
+								assert.Equal(t, "call_exec", next.Messages[0].ToolCalls[0].ID)
+								assert.JSONEq(t, arguments, next.Messages[0].ToolCalls[0].Function.Arguments)
+								assert.Equal(t, "tool", next.Messages[1].Role)
+								assert.Equal(t, "call_exec", next.Messages[1].ToolCallID)
+								assert.JSONEq(t, `"tool result"`, string(next.Messages[1].Content))
+							}
+						}
+						t.Run("buffered", func(t *testing.T) {
+							out := ChatCompletionsResponseToResponses(&ChatCompletionsResponse{
+								Choices: []ChatChoice{{Message: ChatMessage{ToolCalls: []ChatToolCall{{
+									ID: "call_exec", Type: "function",
+									Function: ChatFunctionCall{Name: target.name, Arguments: arguments},
+								}}}}},
+							}, "test-model", customTools, functionTools, false, namespaceTools)
+							require.Len(t, out.Output, 1)
+							checkItem(t, out.Output[0], true)
+						})
+						t.Run("streaming", func(t *testing.T) {
+							state := NewChatCompletionsToResponsesStreamState("test-model")
+							state.CustomTools, state.FunctionTools, state.NamespaceTools = customTools, functionTools, namespaceTools
+							idx := 0
+							var events []ResponsesStreamEvent
+							for _, call := range []ChatToolCall{
+								{Index: &idx, ID: "call_exec", Function: ChatFunctionCall{Arguments: arguments[:10]}},
+								{Index: &idx, Function: ChatFunctionCall{Name: target.name, Arguments: arguments[10:]}},
+							} {
+								events = append(events, ChatCompletionsChunkToResponsesEvents(&ChatCompletionsChunk{
+									Choices: []ChatChunkChoice{{Delta: ChatDelta{ToolCalls: []ChatToolCall{call}}}},
+								}, state)...)
+							}
+							events = append(events, FinalizeChatCompletionsResponsesStream(state)...)
+							var added, done int
+							for _, event := range events {
+								if event.Type == "response.output_item.added" || event.Type == "response.output_item.done" {
+									require.NotNil(t, event.Item)
+									checkItem(t, *event.Item, event.Type == "response.output_item.done")
+									wire, err := ResponsesEventToSSE(event)
+									require.NoError(t, err)
+									if target.namespace == "" {
+										assert.NotContains(t, wire, `"namespace"`)
+									} else {
+										assert.Contains(t, wire, `"namespace":"functions"`)
+									}
+									if event.Type == "response.output_item.added" {
+										added++
+									} else {
+										done++
+									}
+								}
+							}
+							assert.Equal(t, 1, added)
+							assert.Equal(t, 1, done)
+							completed := events[len(events)-1]
+							require.Equal(t, "response.completed", completed.Type)
+							require.Len(t, completed.Response.Output, 1)
+							checkItem(t, completed.Response.Output[0], true)
+						})
+					})
+				}
+			})
+		}
+	}
+}
+
 func TestNamespaceChildByBareName_AmbiguousStaysFunctionCall(t *testing.T) {
 	namespaceTools := map[string]NamespacedToolName{
 		"functions__exec":     {Namespace: "functions", Name: "exec", Custom: true},
 		"collaboration__exec": {Namespace: "collaboration", Name: "exec", Custom: true},
 	}
-	if _, ok := namespaceChildByBareName("exec", namespaceTools); ok {
+	if _, ok := namespaceChildByBareName("exec", namespaceTools, nil, nil); ok {
 		t.Fatalf("ambiguous bare name must not resolve to a namespace child")
 	}
 }

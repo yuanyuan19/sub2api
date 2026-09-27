@@ -250,8 +250,12 @@ func NamespaceToolNames(tools []ResponsesTool) map[string]NamespacedToolName {
 // bare child name they saw in earlier history rather than the declared flattened
 // name, so the return path must tolerate the bare form. An ambiguous bare name
 // (two namespace children sharing it) resolves to false so the call stays a
-// plain function call rather than being mis-routed.
-func namespaceChildByBareName(name string, namespaceTools map[string]NamespacedToolName) (NamespacedToolName, bool) {
+// plain function call rather than being mis-routed. Explicitly declared top-level
+// tools own their names and must never be treated as namespace aliases.
+func namespaceChildByBareName(name string, namespaceTools map[string]NamespacedToolName, customTools, functionTools map[string]bool) (NamespacedToolName, bool) {
+	if customTools[name] || functionTools[name] {
+		return NamespacedToolName{}, false
+	}
 	var match NamespacedToolName
 	found := false
 	for _, ns := range namespaceTools {
@@ -284,7 +288,7 @@ func customToolCallName(name string, customTools, functionTools map[string]bool,
 	}
 	// 裸名回退：模型照搬历史里的裸子工具名（如 exec）调用时，仍应还原为带
 	// namespace 的 custom_tool_call / function_call。
-	if namespaced, ok := namespaceChildByBareName(name, namespaceTools); ok {
+	if namespaced, ok := namespaceChildByBareName(name, namespaceTools, customTools, functionTools); ok {
 		return namespaced.Name, namespaced.Custom
 	}
 	match := ""
@@ -1476,7 +1480,7 @@ func chatMessageToResponsesOutput(message ChatMessage, customTools, functionTool
 			namespace := ""
 			if namespaced, exists := namespaceTools[toolCall.Function.Name]; exists && namespaced.Custom {
 				customName, namespace = namespaced.Name, namespaced.Namespace
-			} else if namespaced, ok := namespaceChildByBareName(toolCall.Function.Name, namespaceTools); ok && namespaced.Custom {
+			} else if namespaced, ok := namespaceChildByBareName(toolCall.Function.Name, namespaceTools, customTools, functionTools); ok && namespaced.Custom {
 				customName, namespace = namespaced.Name, namespaced.Namespace
 			}
 			outputs = append(outputs, ResponsesOutput{
@@ -1519,7 +1523,7 @@ func chatMessageToResponsesOutput(message ChatMessage, customTools, functionTool
 			})
 			continue
 		}
-		if ns, ok := namespaceChildByBareName(toolCall.Function.Name, namespaceTools); ok {
+		if ns, ok := namespaceChildByBareName(toolCall.Function.Name, namespaceTools, customTools, functionTools); ok {
 			outputs = append(outputs, ResponsesOutput{
 				Type:      "function_call",
 				ID:        generateItemID(),
@@ -2098,7 +2102,7 @@ func announceChatToolItem(
 	if ns, ok := state.NamespaceTools[stored.Function.Name]; ok && !isToolSearch {
 		state.toolNamespace[idx] = ns
 		itemName, itemNamespace = ns.Name, ns.Namespace
-	} else if ns, ok := namespaceChildByBareName(stored.Function.Name, state.NamespaceTools); ok && !isToolSearch {
+	} else if ns, ok := namespaceChildByBareName(stored.Function.Name, state.NamespaceTools, state.CustomTools, state.FunctionTools); ok && !isToolSearch {
 		state.toolNamespace[idx] = ns
 		itemName, itemNamespace = ns.Name, ns.Namespace
 	}
