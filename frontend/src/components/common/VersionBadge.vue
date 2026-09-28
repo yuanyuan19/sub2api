@@ -12,7 +12,7 @@
         ]"
         :title="hasUpdate ? t('version.updateAvailable') : t('version.upToDate')"
       >
-        <span v-if="currentVersion" class="font-medium" :title="fullVersionLabel">v{{ displayVersion }}</span>
+        <span v-if="currentVersion" class="font-medium">v{{ currentVersion }}</span>
         <span
           v-else
           class="h-3 w-12 animate-pulse rounded bg-gray-200 font-medium dark:bg-dark-600"
@@ -32,7 +32,7 @@
           v-if="dropdownOpen"
           ref="dropdownRef"
           class="absolute left-0 z-50 mt-2 overflow-hidden whitespace-normal rounded-xl border border-gray-200 bg-white shadow-lg transition-all duration-200 dark:border-dark-700 dark:bg-dark-800"
-          :class="rollbackPanelOpen && isReleaseBuild ? 'w-80' : 'w-64'"
+          :class="wideDropdown ? 'w-80' : 'w-64'"
         >
           <!-- Header with refresh button -->
           <div
@@ -83,9 +83,9 @@
                 <div class="inline-flex max-w-full items-center gap-2">
                   <span
                     v-if="currentVersion"
-                    class="max-w-full break-all text-2xl font-bold text-gray-900 dark:text-white"
-                    :title="fullVersionLabel"
-                    >v{{ displayVersion }}</span
+                    class="max-w-full break-all font-bold text-gray-900 dark:text-white"
+                    :class="longVersion ? 'text-xl' : 'text-2xl'"
+                    >v{{ currentVersion }}</span
                   >
                   <span v-else class="text-2xl font-bold text-gray-400 dark:text-dark-500">--</span>
                   <!-- Show check mark when up to date -->
@@ -680,10 +680,7 @@ const dropdownRef = ref<HTMLElement | null>(null)
 // Use store's cached version state
 const loading = computed(() => appStore.versionLoading)
 const currentVersion = computed(() => appStore.currentVersion || props.version || '')
-const displayVersion = computed(() => formatDisplayVersion(currentVersion.value))
-const fullVersionLabel = computed(() =>
-  currentVersion.value ? `v${currentVersion.value}` : ''
-)
+const longVersion = computed(() => currentVersion.value.replace(/^v/i, '').length > 10)
 const latestVersion = computed(() => appStore.latestVersion)
 const releaseInfo = computed(() => appStore.releaseInfo)
 const buildType = computed(() => appStore.buildType)
@@ -743,12 +740,7 @@ const activeManualCommand = computed(() =>
 
 // Image-managed deployments keep the source-build panel, not the binary update buttons.
 const isReleaseBuild = computed(() => buildType.value === 'release' && !updatesDisabled.value)
-
-function formatDisplayVersion(version: string): string {
-  const trimmed = version.replace(/^v/i, '').trim()
-  const meta = trimmed.indexOf('+')
-  return meta === -1 ? trimmed : trimmed.slice(0, meta)
-}
+const wideDropdown = computed(() => longVersion.value || (rollbackPanelOpen.value && isReleaseBuild.value))
 
 function toggleDropdown() {
   dropdownOpen.value = !dropdownOpen.value

@@ -48,9 +48,8 @@ async function openBadge(disabled: boolean, hasUpdate: boolean, buildType = 'rel
 describe('image-managed version badge', () => {
   it.each([false, true])('matches the source-build up-to-date panel with hasUpdate=%s', async hasUpdate => {
     const wrapper = await openBadge(true, hasUpdate)
-    expect(wrapper.get('button').text()).toBe('v0.2.8')
-    expect(wrapper.text()).toContain('v0.2.8')
-    expect(wrapper.text()).not.toContain('v0.2.8+mainstation')
+    expect(wrapper.get('button').text()).toBe('v0.2.8+mainstation.2')
+    expect(wrapper.text()).toContain('v0.2.8+mainstation.2')
     expect(wrapper.text()).toContain('version.upToDate')
     expect(wrapper.text()).toContain('version.rollback')
     expect(wrapper.text()).not.toContain('version.updateNow')
