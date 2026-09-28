@@ -46,13 +46,25 @@ async function openBadge(disabled: boolean, hasUpdate: boolean, buildType = 'rel
 }
 
 describe('image-managed version badge', () => {
-  it.each([false, true])('hides binary actions with hasUpdate=%s', async hasUpdate => {
+  it.each([false, true])('matches the source-build up-to-date panel with hasUpdate=%s', async hasUpdate => {
     const wrapper = await openBadge(true, hasUpdate)
-    expect(wrapper.text()).toContain('version.updatesDisabledHint')
+    expect(wrapper.get('button').text()).toBe('v0.2.8')
+    expect(wrapper.text()).toContain('v0.2.8')
+    expect(wrapper.text()).not.toContain('v0.2.8+mainstation')
+    expect(wrapper.text()).toContain('version.upToDate')
+    expect(wrapper.text()).toContain('version.rollback')
     expect(wrapper.text()).not.toContain('version.updateNow')
-    expect(wrapper.text()).not.toContain('version.rollback')
+    expect(wrapper.text()).not.toContain('version.updateAvailable')
+    expect(wrapper.text()).not.toContain('version.updatesDisabledHint')
     expect(wrapper.find('a').attributes('href')).toContain('/releases/tag/')
-    expect(wrapper.text()).toContain(hasUpdate ? '0.2.9' : 'version.upToDate')
+
+    const rollbackButton = wrapper
+      .findAll('button')
+      .find(button => button.text().includes('version.rollback'))
+    expect(rollbackButton).toBeTruthy()
+    await rollbackButton!.trigger('click')
+    expect(wrapper.text()).toContain('version.updatesDisabledRollbackHint')
+    expect(wrapper.text()).not.toContain('version.rollbackSelectVersion')
   })
 
   it('keeps update actions for normal release builds', async () => {

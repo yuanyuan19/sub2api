@@ -12,7 +12,7 @@
         ]"
         :title="hasUpdate ? t('version.updateAvailable') : t('version.upToDate')"
       >
-        <span v-if="currentVersion" class="font-medium">v{{ currentVersion }}</span>
+        <span v-if="currentVersion" class="font-medium" :title="fullVersionLabel">v{{ displayVersion }}</span>
         <span
           v-else
           class="h-3 w-12 animate-pulse rounded bg-gray-200 font-medium dark:bg-dark-600"
@@ -80,11 +80,12 @@
             <template v-else>
               <!-- Version display - centered and prominent -->
               <div class="mb-4 text-center">
-                <div class="inline-flex items-center gap-2">
+                <div class="inline-flex max-w-full items-center gap-2">
                   <span
                     v-if="currentVersion"
-                    class="text-2xl font-bold text-gray-900 dark:text-white"
-                    >v{{ currentVersion }}</span
+                    class="max-w-full break-all text-2xl font-bold text-gray-900 dark:text-white"
+                    :title="fullVersionLabel"
+                    >v{{ displayVersion }}</span
                   >
                   <span v-else class="text-2xl font-bold text-gray-400 dark:text-dark-500">--</span>
                   <!-- Show check mark when up to date -->
@@ -114,22 +115,7 @@
                 </p>
               </div>
 
-              <div v-if="updatesDisabled" class="space-y-2">
-                <p class="rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs text-blue-600 dark:border-blue-800/50 dark:bg-blue-900/20 dark:text-blue-400">
-                  {{ t('version.updatesDisabledHint') }}
-                </p>
-                <a
-                  v-if="releaseInfo?.html_url && releaseInfo.html_url !== '#'"
-                  :href="releaseInfo.html_url"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  class="flex items-center justify-center gap-1 text-xs text-gray-500 hover:text-gray-700 dark:text-dark-400 dark:hover:text-dark-200"
-                >
-                  {{ t('version.viewChangelog') }}
-                  <Icon name="externalLink" size="xs" :stroke-width="2" />
-                </a>
-              </div>
-              <div v-else-if="updateError" class="space-y-2">
+              <div v-if="updateError" class="space-y-2">
                 <div
                   class="flex items-center gap-3 rounded-lg border border-red-200 bg-red-50 p-3 dark:border-red-800/50 dark:bg-red-900/20"
                 >
@@ -300,7 +286,11 @@
                     />
                   </svg>
                   <p class="text-xs text-blue-600 dark:text-blue-400">
-                    {{ t('version.sourceModeHint') }}
+                    {{
+                      updatesDisabled
+                        ? t('version.updatesDisabledHint')
+                        : t('version.sourceModeHint')
+                    }}
                   </p>
                 </div>
               </div>
@@ -428,7 +418,11 @@
                           />
                         </svg>
                         <p class="min-w-0 flex-1 text-xs leading-4 text-blue-600 dark:text-blue-400">
-                          {{ t('version.rollbackSourceHint') }}
+                          {{
+                            updatesDisabled
+                              ? t('version.updatesDisabledRollbackHint')
+                              : t('version.rollbackSourceHint')
+                          }}
                         </p>
                       </div>
 
@@ -686,11 +680,15 @@ const dropdownRef = ref<HTMLElement | null>(null)
 // Use store's cached version state
 const loading = computed(() => appStore.versionLoading)
 const currentVersion = computed(() => appStore.currentVersion || props.version || '')
+const displayVersion = computed(() => formatDisplayVersion(currentVersion.value))
+const fullVersionLabel = computed(() =>
+  currentVersion.value ? `v${currentVersion.value}` : ''
+)
 const latestVersion = computed(() => appStore.latestVersion)
-const hasUpdate = computed(() => appStore.hasUpdate)
 const releaseInfo = computed(() => appStore.releaseInfo)
 const buildType = computed(() => appStore.buildType)
 const updatesDisabled = computed(() => appStore.updatesDisabled)
+const hasUpdate = computed(() => appStore.hasUpdate && !updatesDisabled.value)
 
 // Update process states (local to this component)
 const updating = ref(false)
@@ -743,8 +741,14 @@ const activeManualCommand = computed(() =>
   manualTab.value === 'docker' ? dockerRollbackCommand.value : scriptRollbackCommand.value
 )
 
-// Only show update check for release builds (binary/docker deployment)
-const isReleaseBuild = computed(() => buildType.value === 'release')
+// Image-managed deployments keep the source-build panel, not the binary update buttons.
+const isReleaseBuild = computed(() => buildType.value === 'release' && !updatesDisabled.value)
+
+function formatDisplayVersion(version: string): string {
+  const trimmed = version.replace(/^v/i, '').trim()
+  const meta = trimmed.indexOf('+')
+  return meta === -1 ? trimmed : trimmed.slice(0, meta)
+}
 
 function toggleDropdown() {
   dropdownOpen.value = !dropdownOpen.value
@@ -798,7 +802,7 @@ function resetRollbackState() {
 }
 
 async function toggleRollbackPanel() {
-  if (!isAdmin.value || updatesDisabled.value) return
+  if (!isAdmin.value) return
   rollbackPanelOpen.value = !rollbackPanelOpen.value
   // Source builds only show a hint, no version list to fetch
   if (
